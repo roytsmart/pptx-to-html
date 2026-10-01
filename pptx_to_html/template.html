@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+  body {
+    margin: 0;
+    background: #14161a;
+    color: #e8e8e8;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { padding: 2.5rem 1.5rem 1rem; max-width: 60rem; margin: 0 auto; }
+  header h1 { font-size: 1.5rem; line-height: 1.3; font-weight: 600; margin: 0 0 .4rem; }
+  header p { margin: 0; opacity: .65; font-size: .95rem; }
+  main { max-width: 76rem; margin: 0 auto; padding: 1rem 1.5rem 6rem; }
+  .slide { position: relative; margin: 2.5rem 0; }
+  .stage {
+    position: relative;
+    aspect-ratio: {{aspect}};
+    background: #fff;
+    container-type: size;
+    overflow: hidden;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.5);
+  }
+  .piece { position: absolute; }
+  .crop { overflow: hidden; }
+  /* PowerPoint stretches a picture over its shape, so this does too. */
+  .fill { width: 100%; height: 100%; object-fit: fill; }
+  .text {
+    color: {{color}};
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+  .text p { margin: 0; }
+  /* The typeface the theme asks for, and what to fall back to. */
+  .text { font-family: {{font}}; }
+  /* A bullet hangs in the indent PowerPoint gives it, in a box exactly that
+     wide, so that the first line of a bullet starts where the ones it wraps
+     onto do. */
+  .bullet { text-indent: var(--indent); }
+  .bullet::before {
+    content: var(--bullet);
+    display: inline-block;
+    width: calc(-1 * var(--indent));
+    text-indent: 0;
+  }
+  .number {
+    position: absolute; right: 0; bottom: -1.4rem;
+    font-size: .8rem; opacity: .45; font-variant-numeric: tabular-nums;
+  }
+  button {
+    appearance: none; cursor: pointer; font: inherit; font-size: .9rem;
+    margin-top: 1.1rem; padding: .45rem .9rem;
+    color: #e8e8e8; background: #262a31;
+    border: 1px solid #3a3f48; border-radius: 4px;
+  }
+  button:hover { background: #31363f; }
+
+  /* Presenting: one slide at a time, filling whatever it is given, rather
+     than the whole deck down a page. The page keeps its own layout, and
+     none of the slides' own geometry changes: every position on them is a
+     share of the slide and every size a share of its height, so a slide
+     blown up to fill a screen is the same slide. */
+  body.present { overflow: hidden; background: #000; }
+  body.present header, body.present .number { display: none; }
+  body.present main { max-width: none; margin: 0; padding: 0; }
+  body.present .slide { display: none; margin: 0; }
+  body.present .slide.current {
+    display: grid; place-items: center;
+    position: fixed; inset: 0; background: #000;
+  }
+  body.present .stage {
+    width: min(100%, calc(100vh * {{aspect}}));
+    width: min(100%, calc(100dvh * {{aspect}}));
+    border-radius: 0; box-shadow: none;
+  }
+  #hud {
+    position: fixed; right: 1rem; bottom: .7rem; z-index: 1;
+    font-size: .85rem; opacity: .4; pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  body:not(.present) #hud { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{title}}</h1>{{subtitle}}
+  <button id="present">Present full screen</button>
+</header>
+<main>
+{{slides}}
+</main>
+<div id="hud"></div>
+<script>
+  // A page full of movies is a great deal to ask of a connection, so each
+  // one starts when it comes into view and stops when it leaves.
+  const watcher = new IntersectionObserver(
+    (entries) => entries.forEach((entry) => {
+      const video = entry.target;
+      if (entry.isIntersecting) {
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    }),
+    { threshold: 0.2 },
+  );
+  document.querySelectorAll("video").forEach((v) => watcher.observe(v));
+
+  // The deck asks for a typeface the reader may not have, and a substitute
+  // sets wider or narrower and wraps somewhere else. Anything which no
+  // longer fits the box it was given is brought back down until it does,
+  // which is what PowerPoint does to text of its own accord.
+  function fit() {
+    document.querySelectorAll(".text").forEach((box) => {
+      if (getComputedStyle(box).whiteSpace === "nowrap") return;
+      // A box on a slide which is not the one being shown has no size to
+      // fit anything to, and would be shrunk to nothing for it.
+      if (!box.clientHeight) return;
+
+      const lines = box.querySelectorAll("p");
+      lines.forEach((p) => {
+        if (p.dataset.size === undefined) p.dataset.size = p.style.fontSize;
+        p.style.fontSize = p.dataset.size;
+      });
+      if (![...lines].every((p) => p.dataset.size.endsWith("cqh"))) return;
+      // Measured from the top of the first line to the foot of the last
+      // rather than by asking the box how far it is overrun, which only
+      // counts what hangs off the bottom: a box anchored to its foot spills
+      // upwards. Measuring the whole stretch also counts the space between
+      // paragraphs.
+      const style = getComputedStyle(box);
+      const room =
+        box.clientHeight -
+        parseFloat(style.paddingTop) -
+        parseFloat(style.paddingBottom);
+      const height = () =>
+        lines[lines.length - 1].getBoundingClientRect().bottom -
+        lines[0].getBoundingClientRect().top;
+      // Shrunk in the units it was written in, which are a share of the
+      // slide's height rather than a count of pixels: the whole layout is
+      // proportional, so what fits at one size fits at every size, and a
+      // slide blown up to fill a screen carries its text up with it.
+      let scale = 1;
+      let guard = 0;
+      while (height() > room + 1 && guard < 60) {
+        scale *= 0.97;
+        lines.forEach((p) => {
+          p.style.fontSize = parseFloat(p.dataset.size) * scale + "cqh";
+        });
+        guard += 1;
+      }
+    });
+  }
+  fit();
+  window.addEventListener("resize", fit);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+  // Presenting: the same slides, moved through one at a time instead of
+  // scrolled past. The page is left as it is underneath, so leaving puts
+  // the reader back on the slide they had reached.
+  const slides = [...document.querySelectorAll(".slide")];
+  const hud = document.getElementById("hud");
+  let at = 0;
+  let told = null;
+
+  function presenting() {
+    return document.body.classList.contains("present");
+  }
+
+  function show(index) {
+    at = Math.max(0, Math.min(slides.length - 1, index));
+    slides.forEach((slide, i) => slide.classList.toggle("current", i === at));
+    if (!told) hud.textContent = at + 1 + " / " + slides.length;
+    // A slide arrived at is a slide started from its beginning, which is
+    // what a movie on a slide does when the slide is put up.
+    slides[at].querySelectorAll("video").forEach((video) => {
+      video.currentTime = 0;
+      video.play().catch(() => {});
+    });
+  }
+
+  function nearest() {
+    let best = 0;
+    let gap = Infinity;
+    slides.forEach((slide, i) => {
+      const d = Math.abs(slide.getBoundingClientRect().top);
+      if (d < gap) {
+        gap = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  function present(on) {
+    if (on === presenting()) return;
+    document.body.classList.toggle("present", on);
+    if (on) {
+      // Clicking to move on is worth saying out loud, since nothing on the
+      // screen suggests it.
+      hud.textContent = "click or arrow keys to move  ·  Esc to leave";
+      told = setTimeout(() => {
+        told = null;
+        hud.textContent = at + 1 + " / " + slides.length;
+      }, 4000);
+      show(nearest());
+      const el = document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    } else {
+      if (told) clearTimeout(told), (told = null);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      slides[at].scrollIntoView({ block: "center" });
+    }
+  }
+
+  document.getElementById("present").addEventListener("click", () => present(true));
+
+  // Leaving full screen, by Esc or otherwise, is leaving the presentation.
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement) present(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!presenting()) {
+      if (event.key === "f") {
+        present(true);
+        event.preventDefault();
+      }
+      return;
+    }
+    const forward = ["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"];
+    const back = ["ArrowLeft", "ArrowUp", "PageUp", "Backspace"];
+    if (forward.includes(event.key)) show(at + 1);
+    else if (back.includes(event.key)) show(at - 1);
+    else if (event.key === "Home") show(0);
+    else if (event.key === "End") show(slides.length - 1);
+    else if (event.key === "Escape") present(false);
+    else return;
+    event.preventDefault();
+  });
+
+  // On the slides themselves, so that the button which starts all this is
+  // not also the first click through it.
+  let swiped = false;
+  document.querySelector("main").addEventListener("click", (event) => {
+    if (!presenting()) return;
+    // A movie is left to its own controls.
+    if (event.target.closest("video")) return;
+    if (swiped) {
+      swiped = false;
+      return;
+    }
+    show(at + 1);
+  });
+
+  let start = null;
+  addEventListener("touchstart", (e) => (start = e.touches[0].clientX), { passive: true });
+  addEventListener(
+    "touchend",
+    (event) => {
+      if (start === null || !presenting()) return;
+      const moved = event.changedTouches[0].clientX - start;
+      start = null;
+      if (Math.abs(moved) < 40) return;
+      swiped = true;
+      show(moved < 0 ? at + 1 : at - 1);
+    },
+    { passive: true },
+  );
+</script>
+</body>
+</html>

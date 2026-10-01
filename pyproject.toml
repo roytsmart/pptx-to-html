@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pptx-to-html"
+dynamic = ["version"]
+description = "Turn a PowerPoint deck into a single web page, with its movies playing in place"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "BSD-3-Clause"
+authors = [
+    {name = "Roy T. Smart", email = "roytsmart@gmail.com"},
+]
+dependencies = [
+    "python-pptx>=1.0",
+    "lxml",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pillow",
+]
+
+[project.scripts]
+pptx-to-html = "pptx_to_html.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/roytsmart/pptx-to-html"
+
+[tool.setuptools]
+packages = ["pptx_to_html"]
+
+[tool.setuptools.package-data]
+pptx_to_html = ["template.html"]
+
+[tool.setuptools_scm]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+]
