@@ -5,6 +5,7 @@ import fractions
 import html
 import importlib.resources
 import io
+import math
 import pathlib
 import posixpath
 import re
@@ -242,7 +243,7 @@ class _SlideConverter:
             return self.picture(element, box, part)
         if kind == "sp":
             geometry = find(element, "p:spPr/a:prstGeom")
-            if geometry is not None and geometry.get("prst") in ("line", "straightConnector1"):
+            if geometry is not None and geometry.get("prst") in _CONNECTORS:
                 return self.line(element, box)
             return self.shape(element, box, chain, part)
         if kind == "cxnSp":
@@ -553,12 +554,15 @@ class _SlideConverter:
         if line is None:
             return None
         width, color = line
-        x1, y1 = box.x, box.y
-        x2, y2 = box.x + box.width, box.y + box.height
-        if box.flip_h:
-            x1, x2 = x2, x1
-        if box.flip_v:
-            y1, y2 = y2, y1
+        geometry = find(properties, "a:prstGeom")
+        preset = geometry.get("prst", "line") if geometry is not None else "line"
+        if preset not in _CONNECTORS:
+            self.warn(f"the {preset!r} connector is drawn as a straight line")
+        adjust = [
+            int(g.get("fmla", "val 50000").split()[-1]) / 100000
+            for g in findall(geometry, "a:avLst/a:gd")
+        ]
+        path = _connector(preset, adjust, box)
         markers = ""
         ends = ""
         for end, attribute in (("headEnd", "marker-start"), ("tailEnd", "marker-end")):
@@ -577,8 +581,8 @@ class _SlideConverter:
         return (
             f'<svg class="piece" style="z-index:{self.z};left:0;top:0;width:100%;height:100%;overflow:visible" '
             f'viewBox="0 0 {self.width} {self.height}">{defs}'
-            f'<line x1="{round(x1)}" y1="{round(y1)}" x2="{round(x2)}" y2="{round(y2)}" stroke="{color.css()}" '
-            f'stroke-width="{width}"{ends}/></svg>'
+            f'<path d="{path}" fill="none" stroke="{color.css()}" '
+            f'stroke-width="{width}" stroke-linejoin="round"{ends}/></svg>'
         )
 
     def background(self) -> str:
@@ -786,6 +790,74 @@ def _gif_timing(data: bytes) -> "tuple[float, float, int] | None":
 
 def _slashes(path: str) -> str:
     return path.replace("\\", "/")
+
+
+_CONNECTORS = {
+    "line", "straightConnector1",
+    "bentConnector2", "bentConnector3", "bentConnector4", "bentConnector5",
+    "curvedConnector2", "curvedConnector3", "curvedConnector4", "curvedConnector5",
+}
+"""The preset geometries of lines and connectors, which are drawn as paths."""
+
+
+def _connector(preset: str, adjust: "list[float]", box: _Box) -> str:
+    """
+    The SVG path of a line or connector, in the slide's own units.
+
+    Each preset is drawn in its box as PowerPoint defines it, from the top
+    left corner to the bottom right, bending where its adjustments say; the
+    box is then flipped and turned about its center, as PowerPoint does.
+    """
+    w, h = box.width, box.height
+
+    def at(index: int) -> float:
+        return adjust[index] if index < len(adjust) else 0.5
+
+    commands: list[tuple[str, list[tuple[float, float]]]]
+    if preset == "bentConnector2":
+        commands = [("M", [(0, 0)]), ("L", [(w, 0)]), ("L", [(w, h)])]
+    elif preset == "bentConnector3":
+        x1 = w * at(0)
+        commands = [("M", [(0, 0)]), ("L", [(x1, 0)]), ("L", [(x1, h)]), ("L", [(w, h)])]
+    elif preset == "bentConnector4":
+        x1, y2 = w * at(0), h * at(1)
+        commands = [("M", [(0, 0)]), ("L", [(x1, 0)]), ("L", [(x1, y2)]), ("L", [(w, y2)]), ("L", [(w, h)])]
+    elif preset == "bentConnector5":
+        x1, y2, x3 = w * at(0), h * at(1), w * at(2)
+        commands = [
+            ("M", [(0, 0)]), ("L", [(x1, 0)]), ("L", [(x1, y2)]),
+            ("L", [(x3, y2)]), ("L", [(x3, h)]), ("L", [(w, h)]),
+        ]
+    elif preset == "curvedConnector2":
+        commands = [("M", [(0, 0)]), ("C", [(w / 2, 0), (w, h / 2), (w, h)])]
+    elif preset.startswith("curvedConnector"):
+        # Curved connectors of more than three segments are drawn as the
+        # three-segment kind, which bends once the same way.
+        x2 = w * at(0)
+        commands = [
+            ("M", [(0, 0)]),
+            ("C", [(x2 / 2, 0), (x2, h / 4), (x2, h / 2)]),
+            ("C", [(x2, 3 * h / 4), ((x2 + w) / 2, h), (w, h)]),
+        ]
+    else:
+        commands = [("M", [(0, 0)]), ("L", [(w, h)])]
+
+    angle = math.radians(box.rotation)
+    cos, sin = math.cos(angle), math.sin(angle)
+
+    def place(x: float, y: float) -> str:
+        if box.flip_h:
+            x = w - x
+        if box.flip_v:
+            y = h - y
+        dx, dy = x - w / 2, y - h / 2
+        sx = box.x + w / 2 + dx * cos - dy * sin
+        sy = box.y + h / 2 + dx * sin + dy * cos
+        return f"{round(sx)},{round(sy)}"
+
+    return " ".join(
+        command + " ".join(place(x, y) for x, y in points) for command, points in commands
+    )
 
 
 def _walk(

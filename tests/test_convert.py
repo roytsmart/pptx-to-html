@@ -3,10 +3,10 @@ import pathlib
 import shutil
 import subprocess
 import zipfile
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import pytest
-from lxml import html
+from lxml import etree, html
 from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -16,6 +16,8 @@ from pptx.shapes.placeholder import SlidePlaceholder
 from pptx.util import Emu, Pt
 
 import pptx_to_html
+
+A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 WIDTH = 12192000
 HEIGHT = 6858000
@@ -307,12 +309,42 @@ def test_line(tmp_path):
 
     page = convert(presentation, tmp_path, title="Talk")
 
-    drawn = one(slide(page, 1).find(".//line"))
+    drawn = one(slide(page, 1).find(".//path"))
     assert drawn.get("stroke") == "#FF0000"
     assert drawn.get("stroke-width") == str(Pt(2))
     # Drawn from the bottom left corner to the top right one.
-    assert (drawn.get("x1"), drawn.get("y1")) == ("0", str(HEIGHT))
-    assert (drawn.get("x2"), drawn.get("y2")) == (str(WIDTH), "0")
+    assert drawn.get("d") == f"M0,{HEIGHT} L{WIDTH},0"
+
+
+def test_elbow_connector(tmp_path):
+    # The elbow on a slide of the 2022 LMSAL colloquium that comes out of the
+    # left of one box and goes down into another: turned half a circle and
+    # flipped, its corner is at the top left.
+    presentation = deck()
+    blank = presentation.slides.add_slide(presentation.slide_layouts[LAYOUT_BLANK])
+    elbow = blank.shapes.add_connector(MSO_CONNECTOR.ELBOW, ORIGIN, ORIGIN, Emu(100), Emu(100))
+    elbow.line.color.rgb = RGBColor(0, 0, 0)
+    element = cast(etree._Element, elbow._element)
+    # python-pptx's elbow bends twice; the one on the slide bends once.
+    geometry = element.find(f".//{{{A}}}prstGeom")
+    assert geometry is not None
+    geometry.set("prst", "bentConnector2")
+    frame = element.find(f".//{{{A}}}xfrm")
+    assert frame is not None
+    frame.attrib.clear()
+    frame.set("rot", "10800000")
+    frame.set("flipV", "1")
+    offset, extent = frame.find(f"{{{A}}}off"), frame.find(f"{{{A}}}ext")
+    assert offset is not None and extent is not None
+    offset.set("x", "8097918")
+    offset.set("y", "3579853")
+    extent.set("cx", "422932")
+    extent.set("cy", "1213337")
+
+    page = convert(presentation, tmp_path, title="Talk")
+
+    drawn = one(slide(page, 1).find(".//path"))
+    assert drawn.get("d") == "M8520850,3579853 L8097918,3579853 L8097918,4793190"
 
 
 def test_background(tmp_path):
