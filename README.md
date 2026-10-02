@@ -26,7 +26,8 @@ directly.
 
 Movies embedded in a deck are often much larger than they need to be on the
 web. `--reencode` re-encodes them as H.264 with `ffmpeg`, at most 1920 pixels
-wide by default:
+wide by default, and turns animated GIFs into movies too when that makes them
+smaller:
 
 ```bash
 pptx-to-html talk.pptx docs/ --reencode
@@ -41,6 +42,15 @@ which is how to replace a heavy animated GIF with the movie it was made from:
 pptx-to-html talk.pptx docs/ \
     --media media3.mp4=../figures/inversion.mp4 \
     --media image1.gif=../figures/cinemagraph.mp4
+```
+
+A deck can link to pictures and movies instead of embedding them, and the
+links break when the files move, or when the deck comes from another computer.
+Linked files found where the deck says they are are copied in like embedded
+ones, and `--relink` says where they have moved to:
+
+```bash
+pptx-to-html talk.pptx docs/ --relink "C:/Users/old=C:/Users/new"
 ```
 
 `--notes` puts each slide's speaker notes under it, so the page reads as the
@@ -58,7 +68,8 @@ pptx_to_html.convert("talk.pptx", "docs", reencode=pptx_to_html.Reencode())
 
 ## What it handles
 
-- Pictures, including cropped ones and SVGs.
+- Pictures, including cropped ones and SVGs. TIFF and BMP pictures, which most
+  browsers do not show, are converted to PNG.
 - Movies, with their poster frames.
 - Text in placeholders and text boxes, with the formatting it inherits from
   the layout, the master, and the theme: sizes, colors, typefaces, bold and

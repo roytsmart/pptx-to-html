@@ -4,15 +4,16 @@ import dataclasses
 import fractions
 import html
 import importlib.resources
+import io
 import pathlib
 import posixpath
-import shutil
 import subprocess
 import tempfile
 import warnings
 from collections.abc import Callable, Iterator
 from typing import TypeAlias
 
+import PIL.Image
 import pptx
 from lxml import etree
 from pptx.opc.package import Part
@@ -76,6 +77,7 @@ def convert(
     reencode: "Reencode | None" = None,
     include_hidden: bool = False,
     notes: bool = False,
+    relink: "dict[str, str] | None" = None,
 ) -> pathlib.Path:
     """
     Write a deck out as a web page: ``index.html`` and a ``media`` folder.
@@ -103,6 +105,11 @@ def convert(
     notes
         Whether to show each slide's speaker notes under it. Off by default,
         since notes are often not meant for an audience.
+    relink
+        Folders that files the deck links to have moved from, and where they
+        are now, like ``{"C:/Users/old": "C:/Users/new"}``. A linked file
+        found on this computer is copied next to the page like an embedded
+        one.
 
     Returns
     -------
@@ -114,7 +121,7 @@ def convert(
     width = int(presentation.slide_width or 12192000)
     height = int(presentation.slide_height or 6858000)
 
-    library = _Media(output / "media", media or {}, reencode)
+    library = _Media(output / "media", media or {}, reencode, relink or {})
     slides = [
         s for s in presentation.slides if include_hidden or s.element.get("show") != "0"
     ]
@@ -430,10 +437,13 @@ class _SlideConverter:
         name = posixpath.basename(relationship.target_ref.replace("\\", "/"))
         if name in self.library.substitutes:
             return self.library.substitutes[name]
+        found = self.library.locate(relationship.target_ref)
+        if found is not None:
+            return self.library.add_file(found, movie=movie)
         self.warn(
             f"{_name(element)!r} links to {relationship.target_ref} outside the deck "
-            f"instead of embedding it, so it was left out (give it a substitute "
-            f"with --media {name}=ADDRESS)"
+            f"instead of embedding it, so it was left out (say where it moved with "
+            f"--relink OLD=NEW, or give it a substitute with --media {name}=ADDRESS)"
         )
         return None
 
@@ -598,6 +608,13 @@ class _SlideConverter:
         return ""
 
 
+_FORMATS = {"PNG": ".png", "JPEG": ".jpg", "GIF": ".gif", "WEBP": ".webp"}
+"""The extension each picture format browsers show is given, by Pillow's name for it."""
+
+_CONVERTED = {"TIFF", "BMP"}
+"""Picture formats most browsers do not show, which are converted to PNG."""
+
+
 class _Media:
     """The folder the pictures and movies on a page are copied into."""
 
@@ -606,54 +623,163 @@ class _Media:
         folder: pathlib.Path,
         substitutes: "dict[str, str]",
         reencode: "Reencode | None",
+        relink: "dict[str, str]",
     ):
         self.folder = folder
         self.substitutes = substitutes
         self.reencode = reencode
+        self.relink = [(_slashes(old).lower(), _slashes(new)) for old, new in relink.items()]
         self.written: dict[str, str] = {}
+        """The address each file was given, by the part or path it came from."""
+        self.names: set[str] = set()
+        """The names already taken in the folder."""
 
     def add(self, part: Part, movie: bool = False) -> str:
-        """The address of a picture or movie on the page, copying it there the first time."""
+        """The address of a picture or movie in the deck, copying it the first time."""
         name = posixpath.basename(str(part.partname))
         if name in self.substitutes:
             return self.substitutes[name]
-        if name in self.written:
-            return self.written[name]
+        return self._store(str(part.partname), name, part.blob, movie)
+
+    def add_file(self, path: pathlib.Path, movie: bool = False) -> str:
+        """The address of a picture or movie the deck links to, copying it the first time."""
+        return self._store(str(path.resolve()), path.name, path.read_bytes(), movie)
+
+    def locate(self, target: str) -> "pathlib.Path | None":
+        """Where a file a deck links to is on this computer, if anywhere."""
+        path = _slashes(target)
+        for prefix in ("file:///", "file://"):
+            path = path.removeprefix(prefix)
+        for old, new in self.relink:
+            if path.lower().startswith(old):
+                path = new + path[len(old):]
+                break
+        candidate = pathlib.Path(path)
+        return candidate if candidate.is_file() else None
+
+    def _store(self, key: str, name: str, data: bytes, movie: bool) -> str:
+        if key in self.written:
+            return self.written[key]
         self.folder.mkdir(parents=True, exist_ok=True)
-        if movie and self.reencode is not None:
-            name = self._shrink(part.blob, name)
-        else:
-            (self.folder / name).write_bytes(part.blob)
+        name, data = self._movie(name, data) if movie else self._picture(name, data)
+        name = self._unique(name)
+        (self.folder / name).write_bytes(data)
         address = f"media/{name}"
-        self.written[posixpath.basename(str(part.partname))] = address
+        self.written[key] = address
         return address
 
-    def _shrink(self, blob: bytes, name: str) -> str:
-        """Re-encode a movie as H.264, keeping the original if that is no smaller."""
+    def _unique(self, name: str) -> str:
+        """A name not yet taken in the folder: two linked files can share one."""
+        stem, suffix = posixpath.splitext(name)
+        candidate = name
+        number = 1
+        while candidate in self.names:
+            number += 1
+            candidate = f"{stem}-{number}{suffix}"
+        self.names.add(candidate)
+        return candidate
+
+    def _movie(self, name: str, data: bytes) -> "tuple[str, bytes]":
+        """A movie, re-encoded if asked and if that makes it smaller."""
+        if self.reencode is None:
+            return name, data
+        encoded = self._encode(name, data)
+        if len(encoded) < len(data) or not name.lower().endswith(".mp4"):
+            return posixpath.splitext(name)[0] + ".mp4", encoded
+        return name, data
+
+    def _picture(self, name: str, data: bytes) -> "tuple[str, bytes]":
+        """
+        A picture in a form browsers show: given the extension its contents
+        call for, converted to PNG if it is a TIFF or BMP, and turned into a
+        movie if it is an animated GIF and movies are being re-encoded, when
+        the movie is the smaller.
+        """
+        stem, suffix = posixpath.splitext(name)
+        if suffix.lower() == ".svg" or data.lstrip()[:1] == b"<":
+            return name, data
+        try:
+            image = PIL.Image.open(io.BytesIO(data))
+        except PIL.UnidentifiedImageError:
+            return name, data
+        kind = image.format or ""
+        if kind == "GIF" and getattr(image, "n_frames", 1) > 1 and self.reencode is not None:
+            encoded = self._encode(name, data)
+            if len(encoded) < len(data):
+                return f"{stem}.mp4", encoded
+        if kind in _FORMATS:
+            extensions = {_FORMATS[kind]} | ({".jpeg"} if kind == "JPEG" else set())
+            if suffix.lower() not in extensions:
+                return stem + _FORMATS[kind], data
+            return name, data
+        if kind in _CONVERTED:
+            buffer = io.BytesIO()
+            if image.mode not in ("1", "L", "LA", "P", "RGB", "RGBA"):
+                image = image.convert("RGBA")
+            image.save(buffer, "PNG")
+            return f"{stem}.png", buffer.getvalue()
+        return name, data
+
+    def _encode(self, name: str, data: bytes) -> bytes:
+        """A movie or animated GIF re-encoded as H.264, for the web."""
         assert self.reencode is not None
-        stem = pathlib.PurePosixPath(name).stem
-        target = self.folder / f"{stem}.mp4"
         with tempfile.TemporaryDirectory() as scratch:
             source = pathlib.Path(scratch) / name
-            source.write_bytes(blob)
-            encoded = pathlib.Path(scratch) / f"{stem}.encoded.mp4"
+            source.write_bytes(data)
+            encoded = pathlib.Path(scratch) / "encoded.mp4"
             width = self.reencode.max_width
+            filters = [f"scale='min({width},trunc(iw/2)*2)':-2"]
+            timing = _gif_timing(data)
+            if timing is not None:
+                # A movie at a steady frame rate holds each frame until the
+                # next one, and the last has no next one, so a GIF that ends
+                # by holding a frame, like one that blinks between two
+                # pictures, would lose that hold. So the last frame is copied
+                # on past its end, the frames are laid out at a steady rate,
+                # and the movie is cut to the length the GIF plays for.
+                total, hold, rate = timing
+                filters[:0] = [
+                    f"tpad=stop_mode=clone:stop_duration={hold}",
+                    f"fps={rate}",
+                    f"trim=duration={total:.3f}",
+                ]
             command = [
                 self.reencode.ffmpeg, "-y", "-loglevel", "error",
                 "-i", str(source),
                 "-an",
                 "-c:v", "libx264", "-preset", "slow", "-crf", str(self.reencode.crf),
                 "-pix_fmt", "yuv420p",
-                "-vf", f"scale='min({width},trunc(iw/2)*2)':-2",
+                "-vf", ",".join(filters),
                 "-movflags", "+faststart",
                 str(encoded),
             ]
             subprocess.run(command, check=True)
-            if encoded.stat().st_size < len(blob) or not name.lower().endswith(".mp4"):
-                shutil.copyfile(encoded, target)
-                return target.name
-        (self.folder / name).write_bytes(blob)
-        return name
+            return encoded.read_bytes()
+
+
+def _gif_timing(data: bytes) -> "tuple[float, float, int] | None":
+    """
+    How long an animated GIF plays and how long it holds its last frame, in
+    seconds, and the frame rate that keeps its quickest frame, or `None` if
+    the data is not an animated GIF. Delays of a hundredth of a second or
+    less are shown for a tenth, as browsers and ffmpeg both do.
+    """
+    if data[:6] not in (b"GIF87a", b"GIF89a"):
+        return None
+    delays = []
+    with PIL.Image.open(io.BytesIO(data)) as image:
+        for frame in range(getattr(image, "n_frames", 1)):
+            image.seek(frame)
+            delay = image.info.get("duration", 0)
+            delays.append((delay if delay > 10 else 100) / 1000)
+    if len(delays) < 2:
+        return None
+    rate = min(60, max(1, round(1 / min(delays))))
+    return sum(delays), delays[-1], rate
+
+
+def _slashes(path: str) -> str:
+    return path.replace("\\", "/")
 
 
 def _walk(

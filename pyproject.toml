@@ -15,12 +15,12 @@ authors = [
 dependencies = [
     "python-pptx>=1.0",
     "lxml",
+    "pillow",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest",
-    "pillow",
 ]
 
 [project.scripts]

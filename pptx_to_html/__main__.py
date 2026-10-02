@@ -28,6 +28,16 @@ def main(argv: "list[str] | None" = None) -> int:
         ),
     )
     parser.add_argument(
+        "--relink",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help=(
+            "find files the deck links to under NEW instead of OLD, for when they "
+            "moved, e.g. C:/Users/old=C:/Users/new (repeatable)"
+        ),
+    )
+    parser.add_argument(
         "--reencode",
         action="store_true",
         help="re-encode movies as H.264 with ffmpeg to make them smaller",
@@ -50,6 +60,13 @@ def main(argv: "list[str] | None" = None) -> int:
             parser.error(f"--media expects NAME=ADDRESS, not {item!r}")
         media[name] = address
 
+    relink = {}
+    for item in args.relink:
+        old, separator, new = item.partition("=")
+        if not separator:
+            parser.error(f"--relink expects OLD=NEW, not {item!r}")
+        relink[old] = new
+
     reencode = None
     if args.reencode:
         ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
@@ -68,6 +85,7 @@ def main(argv: "list[str] | None" = None) -> int:
             reencode=reencode,
             include_hidden=args.include_hidden,
             notes=args.notes,
+            relink=relink,
         )
     for warning in caught:
         print(f"warning: {warning.message}", file=sys.stderr)
