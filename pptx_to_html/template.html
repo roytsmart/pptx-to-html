@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{title}}</title>
 <style>
+{{fonts}}
   body {
     margin: 0;
     background: #14161a;
@@ -40,6 +41,7 @@
   .text p { margin: 0; }
   /* The typeface the theme asks for, and what to fall back to. */
   .text { font-family: {{font}}; }
+  math { font-family: "Cambria Math", "STIX Two Math", math; }
   /* A bullet hangs in the indent PowerPoint gives it, in a box exactly that
      wide, so that the first line of a bullet starts where the ones it wraps
      onto do. */

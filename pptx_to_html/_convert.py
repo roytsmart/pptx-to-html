@@ -19,6 +19,8 @@ from pptx.opc.package import Part
 from pptx.presentation import Presentation
 from pptx.slide import Slide, SlideLayout, SlideMaster
 
+from ._fonts import font_faces, font_stack
+from ._math import mathml
 from ._text import Inheritance, TextRenderer
 from ._theme import Color, Theme, fill_color, line_style
 from ._xml import NS, find, findall, integer, local, qn
@@ -152,11 +154,12 @@ def convert(
             f"\n  <p>{html.escape(subtitle)}</p>" if subtitle else "",
         )
         .replace("{{aspect}}", f"{ratio.numerator} / {ratio.denominator}")
-        .replace("{{font}}", _font_stack(theme.font_minor))
+        .replace("{{font}}", font_stack(theme.font_minor))
         .replace("{{color}}", default_color.css() if default_color else "#000000")
         .replace("{{controls}}", '\n  <button id="notes">Hide notes</button>' if any_notes else "")
         .replace("{{slides}}", "\n".join(sections))
     )
+    page = page.replace("{{fonts}}", font_faces(page))
     index = output / "index.html"
     index.write_text(page, encoding="utf-8", newline="\n")
     return index
@@ -457,6 +460,7 @@ class _SlideConverter:
                 slide_height=self.height,
                 default_color=self.default_color,
                 hyperlink=lambda rid: _hyperlink(part, rid),
+                warn=lambda message: self.warn(f"{_name(element)!r}: {message}"),
             )
             paragraphs = renderer.paragraphs(body, inheritance)
             if paragraphs:
@@ -473,13 +477,43 @@ class _SlideConverter:
                 if (inheritance.body("vert") or "horz") != "horz":
                     self.warn(f"{_name(element)!r} has vertical text, which is set horizontally")
 
-        if not paragraphs and fill is None and not has_line:
+        picture = self.picture_fill(element, properties, part)
+        if not paragraphs and fill is None and not has_line and not picture:
             return None
         if fill is not None:
             styles.append(f"background:{fill.css()}")
         styles += outline
-        classes = "piece text" if paragraphs else "piece"
-        return f'<div class="{classes}" style="{html.escape(";".join(styles))}">{"".join(paragraphs)}</div>'
+        classes = ["piece"]
+        if paragraphs:
+            classes.append("text")
+        if picture:
+            classes.append("crop")
+        return (
+            f'<div class="{" ".join(classes)}" style="{html.escape(";".join(styles))}">'
+            f'{picture}{"".join(paragraphs)}</div>'
+        )
+
+    def picture_fill(self, element: etree._Element, properties: "etree._Element | None", part: Part) -> str:
+        """
+        A picture a shape is filled with, stretched over it. This is also how
+        PowerPoint draws the stand-in for content an older reader cannot,
+        such as a text box with an equation in it.
+        """
+        fill = find(properties, "a:blipFill")
+        if fill is None:
+            return ""
+        source = self.image_source(find(fill, "a:blip"), part, element)
+        if source is None:
+            return ""
+        # How far the picture's edges sit inside the shape's, in thousandths
+        # of a percent; negative when the picture spills over them.
+        rect = find(fill, "a:stretch/a:fillRect")
+        left, top, right, bottom = (integer(rect, side) / 1000 for side in ("l", "t", "r", "b"))
+        style = (
+            f"position:absolute;left:{_fixed(left)}%;top:{_fixed(top)}%;"
+            f"width:{_fixed(100 - left - right)}%;height:{_fixed(100 - top - bottom)}%"
+        )
+        return f'<img class="fill" style="{style}" src="{html.escape(source)}" alt="">'
 
     def inheritance(self, element: etree._Element, chain: "list[etree._Element]") -> Inheritance:
         placeholder = _placeholder(element)
@@ -653,10 +687,30 @@ def _walk(
 
             yield from _walk(child, inner)
         elif kind == "AlternateContent":
-            # Newer kinds of content come with an older stand-in, which is
-            # what this draws.
-            fallback = child.find("{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback")
-            yield from _walk(fallback, transform)
+            yield from _walk(_alternative(child), transform)
+
+
+_COMPATIBILITY = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+
+_UNDERSTOOD = {
+    # Office 2010 drawing, which is what equations in text need.
+    "http://schemas.microsoft.com/office/drawing/2010/main",
+}
+"""The newer namespaces whose content this can draw itself."""
+
+
+def _alternative(content: etree._Element) -> "etree._Element | None":
+    """
+    The version of some newer content to draw: the newer one, when everything
+    it needs is understood, and otherwise the older stand-in that comes with
+    it. A text box with an equation in it is the usual case: its stand-in is
+    a picture of the text, laid over an empty box.
+    """
+    for choice in content.findall(f"{{{_COMPATIBILITY}}}Choice"):
+        required = choice.get("Requires", "").split()
+        if required and all(choice.nsmap.get(prefix) in _UNDERSTOOD for prefix in required):
+            return choice
+    return content.find(f"{{{_COMPATIBILITY}}}Fallback")
 
 
 def _box(element: etree._Element, chain: "list[etree._Element]") -> "_Box | None":
@@ -752,6 +806,9 @@ def _note(paragraph: etree._Element, part: Part) -> str:
         if kind == "br":
             pieces.append("<br>")
             continue
+        if kind == "m":
+            pieces.append(mathml(element, lambda message: None))
+            continue
         if kind not in ("r", "fld"):
             continue
         text = html.escape(element.findtext(qn("a:t")) or "", quote=False)
@@ -812,10 +869,6 @@ def _scheme(name: str) -> etree._Element:
     fill = etree.Element(qn("a:solidFill"), nsmap={"a": NS["a"]})
     etree.SubElement(fill, qn("a:schemeClr"), val=name)
     return fill
-
-
-def _font_stack(font: str) -> str:
-    return f'"{font}", "Segoe UI", system-ui, sans-serif'
 
 
 def _fixed(value: float) -> str:

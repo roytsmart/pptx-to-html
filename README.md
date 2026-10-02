@@ -64,12 +64,21 @@ pptx_to_html.convert("talk.pptx", "docs", reencode=pptx_to_html.Reencode())
   the layout, the master, and the theme: sizes, colors, typefaces, bold and
   italic, alignment, line spacing, space between paragraphs, autofit, and
   bulleted and numbered lists.
+- Equations, written out as MathML so they stay sharp and selectable:
+  fractions, scripts, radicals, brackets, sums and integrals, accents, limits,
+  and matrices.
 - Filled and outlined shapes (rectangles, rounded rectangles, ellipses,
   octagons, triangles, diamonds), and lines with arrowheads.
-- Grouped shapes, slide backgrounds, and shapes drawn on layouts and masters.
+- Grouped shapes, slide backgrounds, shapes drawn on layouts and masters, and
+  shapes filled with pictures.
 - Speaker notes, with their emphasis and links, when asked for.
 
 Tables, charts, SmartArt, and sounds are left out, with a warning naming the
-slide. Animations are shown in their final state. Text is set in the typeface
-the theme asks for when the reader has it, and is shrunk to fit its box when a
-substitute sets wider.
+slide. Animations are shown in their final state.
+
+Text is set in the typeface the theme asks for when the reader has it. Office's
+own typefaces, like Aptos, usually are not installed outside Office, so the
+page brings stand-ins: Segoe UI, Arial, or Liberation Sans, scaled so that a
+line of text sets as wide as it does in Aptos, and Carlito and Caladea for
+Calibri and Cambria. Text that still does not fit its box is shrunk until it
+does.

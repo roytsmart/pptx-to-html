@@ -6,6 +6,8 @@ from collections.abc import Callable
 
 from lxml import etree
 
+from ._fonts import font_stack
+from ._math import mathml, text_of
 from ._theme import Color, Theme
 from ._xml import find, findall, integer, local, qn
 
@@ -94,6 +96,7 @@ class TextRenderer:
         slide_height: int,
         default_color: "Color | None",
         hyperlink: "Callable[[str], str | None]",
+        warn: "Callable[[str], None] | None" = None,
     ):
         """
         Parameters
@@ -106,11 +109,14 @@ class TextRenderer:
             The color the page gives text unless told otherwise.
         hyperlink
             Looks up the address a relationship id points to.
+        warn
+            Called with a message about anything that cannot be converted.
         """
         self.theme = theme
         self.slide_height = slide_height
         self.default_color = default_color
         self.hyperlink = hyperlink
+        self.warn: Callable[[str], None] = warn or (lambda message: None)
 
     def cqh(self, points: float) -> float:
         """A length in points as a percentage of the slide's height."""
@@ -189,7 +195,7 @@ class TextRenderer:
             defaults.append(inheritance.font_color)
         defaults += [d for d in (find(e, "a:defRPr") for e in inherited) if d is not None]
 
-        pieces = []
+        pieces: list[tuple[Run | None, str | None, etree._Element]] = []
         runs = []
         for element in paragraph:
             kind = local(element)
@@ -201,6 +207,9 @@ class TextRenderer:
             elif kind == "br":
                 run = self._run(find(element, "a:rPr"), defaults)
                 pieces.append((run, None, element))
+            elif kind == "m":
+                # An equation, which comes through already written as MathML.
+                pieces.append((None, mathml(element, self.warn), element))
 
         base = runs[0] if runs else self._run(find(paragraph, "a:endParaRPr"), defaults)
 
@@ -249,12 +258,14 @@ class TextRenderer:
 
     def _piece(
         self,
-        run: Run,
+        run: "Run | None",
         text: "str | None",
         element: etree._Element,
         base: Run,
         scale: float,
     ) -> str:
+        if run is None:
+            return text or ""
         if text is None:
             return "<br>"
         content = html.escape(text, quote=False)
@@ -329,7 +340,8 @@ class TextRenderer:
             styles.append(f"color:{run.color.css()}")
         reference_font = base.font if base is not None else self.theme.font_minor
         if run.font is not None and run.font != reference_font:
-            styles.append(f"font-family:{_font_stack(run.font, self.theme.font_minor)}")
+            stack = font_stack(run.font, quote="'")
+            styles.append(f"font-family:{stack}")
         if run.bold != (base.bold if base is not None else False):
             styles.append(f"font-weight:{'bold' if run.bold else 'normal'}")
         if run.italic != (base.italic if base is not None else False):
@@ -405,18 +417,11 @@ def _levels(styles: "list[etree._Element]", level: int) -> "list[etree._Element]
 
 
 def _text_of(paragraph: etree._Element) -> str:
-    return "".join(t.text or "" for t in findall(paragraph, ".//a:t"))
+    return text_of(paragraph)
 
 
 def _css_string(text: str) -> str:
     return text.replace("\\", "\\\\").replace("'", "\\'")
-
-
-def _font_stack(font: str, minor: str) -> str:
-    fonts = [f"'{_css_string(font)}'"]
-    if font != minor:
-        fonts.append(f"'{_css_string(minor)}'")
-    return ",".join(fonts + ["'Segoe UI'", "system-ui", "sans-serif"])
 
 
 def _number(value: int, kind: str) -> str:
