@@ -36,6 +36,11 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--crf", type=int, default=26, help="H.264 quality, higher is smaller (default: 26)")
     parser.add_argument("--max-width", type=int, default=1920, help="widest a movie may be (default: 1920)")
     parser.add_argument("--include-hidden", action="store_true", help="include hidden slides")
+    parser.add_argument(
+        "--notes",
+        action="store_true",
+        help="show each slide's speaker notes under it (off by default, since they are often private)",
+    )
     args = parser.parse_args(argv)
 
     media = {}
@@ -62,6 +67,7 @@ def main(argv: "list[str] | None" = None) -> int:
             media=media,
             reencode=reencode,
             include_hidden=args.include_hidden,
+            notes=args.notes,
         )
     for warning in caught:
         print(f"warning: {warning.message}", file=sys.stderr)

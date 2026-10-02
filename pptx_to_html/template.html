@@ -15,7 +15,9 @@
   header h1 { font-size: 1.5rem; line-height: 1.3; font-weight: 600; margin: 0 0 .4rem; }
   header p { margin: 0; opacity: .65; font-size: .95rem; }
   main { max-width: 76rem; margin: 0 auto; padding: 1rem 1.5rem 6rem; }
-  .slide { position: relative; margin: 2.5rem 0; }
+  /* The number under each slide takes up about 1.15rem, which with these
+     margins leaves 2.5rem between one slide and the next. */
+  .slide { position: relative; margin: 1.35rem 0; }
   .stage {
     position: relative;
     aspect-ratio: {{aspect}};
@@ -49,9 +51,19 @@
     text-indent: 0;
   }
   .number {
-    position: absolute; right: 0; bottom: -1.4rem;
+    text-align: right; margin-top: .35rem; line-height: 1;
     font-size: .8rem; opacity: .45; font-variant-numeric: tabular-nums;
   }
+  /* What was said over a slide, under it. It is set as reading rather than
+     as part of the slide, so it keeps the page's size however wide the
+     slide is. */
+  .notes {
+    max-width: 46rem; margin: 1rem auto 0;
+    font-size: 1rem; line-height: 1.6; color: #c9ccd1;
+  }
+  .notes p { margin: 0 0 .75em; }
+  .notes a { color: #8ab4f8; }
+  body.present .notes, body.quiet .notes { display: none; }
   button {
     appearance: none; cursor: pointer; font: inherit; font-size: .9rem;
     margin-top: 1.1rem; padding: .45rem .9rem;
@@ -59,6 +71,7 @@
     border: 1px solid #3a3f48; border-radius: 4px;
   }
   button:hover { background: #31363f; }
+  button + button { margin-left: .5rem; }
 
   /* Presenting: one slide at a time, filling whatever it is given, rather
      than the whole deck down a page. The page keeps its own layout, and
@@ -89,7 +102,7 @@
 <body>
 <header>
   <h1>{{title}}</h1>{{subtitle}}
-  <button id="present">Present full screen</button>
+  <button id="present">Present full screen</button>{{controls}}
 </header>
 <main>
 {{slides}}
@@ -220,6 +233,16 @@
 
   document.getElementById("present").addEventListener("click", () => present(true));
 
+  // The notes can be put away, to look through the slides alone.
+  const notes = document.getElementById("notes");
+  function quiet(on) {
+    document.body.classList.toggle("quiet", on);
+    notes.textContent = on ? "Show notes" : "Hide notes";
+  }
+  if (notes) {
+    notes.addEventListener("click", () => quiet(!document.body.classList.contains("quiet")));
+  }
+
   // Leaving full screen, by Esc or otherwise, is leaving the presentation.
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement) present(false);
@@ -230,6 +253,9 @@
     if (!presenting()) {
       if (event.key === "f") {
         present(true);
+        event.preventDefault();
+      } else if (event.key === "n" && notes) {
+        quiet(!document.body.classList.contains("quiet"));
         event.preventDefault();
       }
       return;

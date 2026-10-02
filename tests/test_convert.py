@@ -252,7 +252,7 @@ def test_cli(tmp_path, capsys):
     path = tmp_path / "deck.pptx"
     presentation.save(str(path))
 
-    assert main([str(path), str(tmp_path / "out"), "--title", "Talk"]) == 0
+    assert main([str(path), str(tmp_path / "out"), "--title", "Talk", "--notes"]) == 0
     assert (tmp_path / "out" / "index.html").is_file()
     assert "index.html" in capsys.readouterr().out
 
@@ -325,3 +325,30 @@ def test_background(tmp_path):
 
     stage = slide(page, 1).find_class("stage")[0]
     assert style(stage)["background"] == "#102030"
+
+
+def test_notes(tmp_path):
+    presentation = deck()
+    first = presentation.slides.add_slide(presentation.slide_layouts[LAYOUT_BLANK])
+    frame = one(first.notes_slide.notes_text_frame)
+    frame.text = "Hello everyone."
+    said = frame.add_paragraph()
+    run = said.add_run()
+    run.text = "This part matters."
+    run.font.bold = True
+    presentation.slides.add_slide(presentation.slide_layouts[LAYOUT_BLANK])
+
+    # Notes are left out unless asked for.
+    page = convert(presentation, tmp_path, title="Talk")
+    assert not page.find_class("notes")
+    assert page.get_element_by_id("notes", None) is None
+
+    page = convert(presentation, tmp_path, title="Talk", notes=True)
+    remarks = slide(page, 1).find_class("notes")
+    assert len(remarks) == 1
+    paragraphs = remarks[0].findall("p")
+    assert [p.text_content() for p in paragraphs] == ["Hello everyone.", "This part matters."]
+    assert one(paragraphs[1].find("strong")).text == "This part matters."
+    # A slide without notes gets nothing under it.
+    assert not slide(page, 2).find_class("notes")
+    assert one(page.get_element_by_id("notes")).text == "Hide notes"

@@ -43,6 +43,11 @@ pptx-to-html talk.pptx docs/ \
     --media image1.gif=../figures/cinemagraph.mp4
 ```
 
+`--notes` puts each slide's speaker notes under it, so the page reads as the
+talk itself. They are hidden while presenting, and the "Hide notes" button (or
+the `n` key) puts them away. Notes are left out unless asked for, since they
+are often not meant for an audience.
+
 The same is available from Python:
 
 ```python
@@ -62,6 +67,7 @@ pptx_to_html.convert("talk.pptx", "docs", reencode=pptx_to_html.Reencode())
 - Filled and outlined shapes (rectangles, rounded rectangles, ellipses,
   octagons, triangles, diamonds), and lines with arrowheads.
 - Grouped shapes, slide backgrounds, and shapes drawn on layouts and masters.
+- Speaker notes, with their emphasis and links, when asked for.
 
 Tables, charts, SmartArt, and sounds are left out, with a warning naming the
 slide. Animations are shown in their final state. Text is set in the typeface

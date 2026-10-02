@@ -73,6 +73,7 @@ def convert(
     media: "dict[str, str] | None" = None,
     reencode: "Reencode | None" = None,
     include_hidden: bool = False,
+    notes: bool = False,
 ) -> pathlib.Path:
     """
     Write a deck out as a web page: ``index.html`` and a ``media`` folder.
@@ -97,6 +98,9 @@ def convert(
         smaller.
     include_hidden
         Whether to include slides hidden in the slide show.
+    notes
+        Whether to show each slide's speaker notes under it. Off by default,
+        since notes are often not meant for an audience.
 
     Returns
     -------
@@ -117,6 +121,7 @@ def convert(
     default_color = theme.color(_scheme("tx1"))
 
     sections = []
+    any_notes = False
     for number, slide in enumerate(slides, start=1):
         converter = _SlideConverter(
             presentation=presentation,
@@ -127,10 +132,12 @@ def convert(
             number=number,
             default_color=default_color,
         )
+        remarks = _notes(slide) if notes else ""
+        any_notes = any_notes or bool(remarks)
         sections.append(
             f'<section class="slide" id="slide-{number}">'
             f'<div class="stage"{converter.background()}>{"".join(converter.pieces())}</div>'
-            f'<div class="number">{number} / {len(slides)}</div></section>'
+            f'<div class="number">{number} / {len(slides)}</div>{remarks}</section>'
         )
 
     if title is None:
@@ -147,6 +154,7 @@ def convert(
         .replace("{{aspect}}", f"{ratio.numerator} / {ratio.denominator}")
         .replace("{{font}}", _font_stack(theme.font_minor))
         .replace("{{color}}", default_color.css() if default_color else "#000000")
+        .replace("{{controls}}", '\n  <button id="notes">Hide notes</button>' if any_notes else "")
         .replace("{{slides}}", "\n".join(sections))
     )
     index = output / "index.html"
@@ -710,6 +718,57 @@ def _match(owner: etree._Element, kind: str, index: "str | None") -> "etree._Ele
             if placeholder.get("type") in ("ctrTitle", "title"):
                 return shape
     return None
+
+
+def _notes(slide: Slide) -> str:
+    """A slide's speaker notes as paragraphs of HTML, or nothing if it has none."""
+    if not slide.has_notes_slide:
+        return ""
+    notes_slide = slide.notes_slide
+    tree = find(notes_slide.element, "p:cSld/p:spTree")
+    paragraphs = []
+    for shape in tree if tree is not None else []:
+        placeholder = _placeholder(shape)
+        # The notes are the body placeholder; the others on a notes page are
+        # the picture of the slide, its number, and the like.
+        if placeholder is None or placeholder.get("type") != "body":
+            continue
+        for paragraph in findall(shape, "p:txBody/a:p"):
+            if not "".join(t.text or "" for t in findall(paragraph, ".//a:t")).strip():
+                continue
+            level = integer(find(paragraph, "a:pPr"), "lvl")
+            indent = f' style="margin-left:{1.5 * level:g}em"' if level else ""
+            paragraphs.append(f"<p{indent}>{_note(paragraph, notes_slide.part)}</p>")
+    if not paragraphs:
+        return ""
+    return f'<div class="notes">{"".join(paragraphs)}</div>'
+
+
+def _note(paragraph: etree._Element, part: Part) -> str:
+    """One paragraph of speaker notes, keeping its emphasis and links."""
+    pieces = []
+    for element in paragraph:
+        kind = local(element)
+        if kind == "br":
+            pieces.append("<br>")
+            continue
+        if kind not in ("r", "fld"):
+            continue
+        text = html.escape(element.findtext(qn("a:t")) or "", quote=False)
+        properties = find(element, "a:rPr")
+        if properties is not None and text:
+            if properties.get("b") in ("1", "true"):
+                text = f"<strong>{text}</strong>"
+            if properties.get("i") in ("1", "true"):
+                text = f"<em>{text}</em>"
+            if (properties.get("u") or "none") != "none":
+                text = f"<u>{text}</u>"
+            link = find(properties, "a:hlinkClick")
+            address = _hyperlink(part, link.get(qn("r:id"), "")) if link is not None else None
+            if address:
+                text = f'<a href="{html.escape(address)}">{text}</a>'
+        pieces.append(text)
+    return "".join(pieces)
 
 
 def _first_title(slides: "list[Slide]") -> "str | None":
