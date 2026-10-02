@@ -7,8 +7,10 @@ import importlib.resources
 import io
 import pathlib
 import posixpath
+import re
 import subprocess
 import tempfile
+import urllib.parse
 import warnings
 from collections.abc import Callable, Iterator
 from typing import TypeAlias
@@ -648,8 +650,12 @@ class _Media:
     def locate(self, target: str) -> "pathlib.Path | None":
         """Where a file a deck links to is on this computer, if anywhere."""
         path = _slashes(target)
-        for prefix in ("file:///", "file://"):
-            path = path.removeprefix(prefix)
+        if path.lower().startswith("file:"):
+            # file:///C:/talk/plot.png on Windows, file:///home/talk/plot.png
+            # elsewhere, either with its spaces written as %20.
+            path = urllib.parse.unquote(re.sub("^/+", "/", path[len("file:"):]))
+            if re.match("^/[A-Za-z]:/", path):
+                path = path[1:]
         for old, new in self.relink:
             if path.lower().startswith(old):
                 path = new + path[len(old):]
