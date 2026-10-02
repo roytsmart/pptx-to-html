@@ -466,6 +466,7 @@ class _SlideConverter:
         body = find(element, "p:txBody")
         paragraphs: list[str] = []
         styles = [self.style(box)]
+        fits = False
         if body is not None:
             inheritance = self.inheritance(element, chain)
             renderer = TextRenderer(
@@ -485,6 +486,8 @@ class _SlideConverter:
                 ]
                 styles.append(f"justify-content:{justify}")
                 styles.append("padding:" + " ".join(f"{self.cqh(i):.3f}cqh" for i in insets))
+                if inheritance.autofit() == "normAutofit":
+                    fits = True
                 if inheritance.body("wrap") == "none":
                     styles.append("white-space:nowrap;width:max-content")
                 if (inheritance.body("vert") or "horz") != "horz":
@@ -499,6 +502,8 @@ class _SlideConverter:
         classes = ["piece"]
         if paragraphs:
             classes.append("text")
+        if fits:
+            classes.append("fit")
         if picture:
             classes.append("crop")
         return (

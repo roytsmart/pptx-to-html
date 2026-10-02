@@ -384,3 +384,31 @@ def test_notes(tmp_path):
     # A slide without notes gets nothing under it.
     assert not slide(page, 2).find_class("notes")
     assert one(page.get_element_by_id("notes")).text == "Hide notes"
+
+
+def test_autofit(tmp_path):
+    presentation = deck()
+    blank = presentation.slides.add_slide(presentation.slide_layouts[LAYOUT_BLANK])
+    shrinking = blank.shapes.add_textbox(ORIGIN, ORIGIN, Emu(WIDTH // 2), Emu(HEIGHT // 8))
+    shrinking.text_frame.word_wrap = True
+    run = shrinking.text_frame.paragraphs[0].add_run()
+    run.text = "Shrunk when it overflows"
+    run.font.size = Pt(27)
+    body = cast(etree._Element, shrinking.text_frame._txBody).find(f"{{{A}}}bodyPr")
+    assert body is not None
+    for child in list(body):
+        body.remove(child)
+    # Saved with the shrink PowerPoint worked out, which it draws the box with.
+    etree.SubElement(body, f"{{{A}}}normAutofit", fontScale="50000", lnSpcReduction="20000")
+    plain = blank.shapes.add_textbox(ORIGIN, Emu(HEIGHT // 2), Emu(WIDTH // 2), Emu(HEIGHT // 8))
+    plain.text_frame.word_wrap = True
+    plain.text_frame.text = "Left to overflow"
+
+    page = convert(presentation, tmp_path, title="Talk")
+
+    boxes = slide(page, 1).find_class("text")
+    fitted = [b for b in boxes if "fit" in b.get("class", "").split()]
+    assert [b.text_content() for b in fitted] == ["Shrunk when it overflows"]
+    p = one(fitted[0].find("p"))
+    assert style(p)["font-size"] == f"{100 * 27 * 0.5 / 540:.4f}cqh"
+    assert style(p)["line-height"] == f"{1.2 * (1 - 0.2):.3f}"

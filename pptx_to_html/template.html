@@ -126,18 +126,23 @@
   );
   document.querySelectorAll("video").forEach((v) => watcher.observe(v));
 
-  // The deck asks for a typeface the reader may not have, and a substitute
-  // sets wider or narrower and wraps somewhere else. Anything which no
-  // longer fits the box it was given is brought back down until it does,
-  // which is what PowerPoint does to text of its own accord.
+  // A box set to shrink its text on overflow is drawn with the shrink
+  // PowerPoint saved. The deck asks for a typeface the reader may not have,
+  // and a substitute sets wider or narrower and wraps somewhere else, so
+  // text which no longer fits is brought down further until it does, as
+  // PowerPoint would. Other boxes are left to overflow, as in PowerPoint.
   function fit() {
-    document.querySelectorAll(".text").forEach((box) => {
+    document.querySelectorAll(".text.fit").forEach((box) => {
       if (getComputedStyle(box).whiteSpace === "nowrap") return;
       // A box on a slide which is not the one being shown has no size to
       // fit anything to, and would be shrunk to nothing for it.
       if (!box.clientHeight) return;
 
       const lines = box.querySelectorAll("p");
+      // Empty paragraphs at the foot of a box take up no room that shows,
+      // and PowerPoint draws them overflowing rather than shrink for them.
+      const shown = [...lines].filter((p) => p.textContent.trim());
+      if (!shown.length) return;
       lines.forEach((p) => {
         if (p.dataset.size === undefined) p.dataset.size = p.style.fontSize;
         p.style.fontSize = p.dataset.size;
@@ -154,7 +159,7 @@
         parseFloat(style.paddingTop) -
         parseFloat(style.paddingBottom);
       const height = () =>
-        lines[lines.length - 1].getBoundingClientRect().bottom -
+        shown[shown.length - 1].getBoundingClientRect().bottom -
         lines[0].getBoundingClientRect().top;
       // Shrunk in the units it was written in, which are a share of the
       // slide's height rather than a count of pixels: the whole layout is

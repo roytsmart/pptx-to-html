@@ -61,6 +61,18 @@ class Inheritance:
     font_color: "Color | None" = None
     """The text color the shape's style asks for, if it has one."""
 
+    def autofit(self) -> "str | None":
+        """
+        How PowerPoint fits the text to its box: ``normAutofit`` to shrink
+        the text, ``spAutoFit`` to grow the box, ``noAutofit`` for neither,
+        from wherever it is first set.
+        """
+        for body in self.bodies:
+            for kind in ("normAutofit", "spAutoFit", "noAutofit"):
+                if find(body, f"a:{kind}") is not None:
+                    return kind
+        return None
+
     def body(self, name: str) -> "str | None":
         """An attribute of the text body, from wherever it is first set."""
         for body in self.bodies:
